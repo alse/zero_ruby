@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    zero_ruby (0.1.0.alpha4)
+    zero_ruby (0.1.0.alpha5)
       dry-struct (~> 1.6)
       dry-types (~> 1.7)
       dry-validation (~> 1.10)
