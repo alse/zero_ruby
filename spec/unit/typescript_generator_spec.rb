@@ -266,6 +266,28 @@ describe "TypeScript Generator extended types" do
   end
 end
 
+# Test InputObject used inside optional arrays
+class TSGenWorkStyleInput < ZeroRuby::InputObject
+  argument :id, ZeroRuby::Types::ID
+  argument :taxon_id, ZeroRuby::Types::ID
+end
+
+class TSGenWorkUpdateInput < ZeroRuby::InputObject
+  argument :id, ZeroRuby::Types::ID
+  argument :work_styles, ZeroRuby::Types::Array.of(TSGenWorkStyleInput).optional
+end
+
+class TSWorkUpdateMutation < ZeroRuby::Mutation
+  argument :work, TSGenWorkUpdateInput
+
+  def execute
+  end
+end
+
+class TSWorkUpdateSchema < ZeroRuby::Schema
+  mutation "works.update", handler: TSWorkUpdateMutation
+end
+
 # Deeply nested InputObjects for testing
 class TSGenAddressInput < ZeroRuby::InputObject
   argument :street, ZeroRuby::Types::String
@@ -390,5 +412,23 @@ describe "TypeScript Generator array types" do
 
     output = array_schema.to_typescript
     expect(output).to include("tagIds?: string[] | null;")
+  end
+end
+
+describe "TypeScript Generator InputObjects in optional arrays" do
+  let(:output) { TSWorkUpdateSchema.to_typescript }
+
+  it "collects InputObjects from optional arrays" do
+    # TSGenWorkStyleInput should be collected and generated
+    expect(output).to include("export interface TSGenWorkStyleInput {")
+  end
+
+  it "generates the nested InputObject interface correctly" do
+    expect(output).to include("id: string;")
+    expect(output).to include("taxonId: string;")
+  end
+
+  it "generates correct array type reference in parent" do
+    expect(output).to include("workStyles?: TSGenWorkStyleInput[] | null;")
   end
 end

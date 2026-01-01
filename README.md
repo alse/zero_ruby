@@ -108,7 +108,7 @@ end
 
 ## Configuration
 
-Create an initializer to customize settings (all options have sensible defaults):
+Create an initializer to customize settings:
 
 ```ruby
 # config/initializers/zero_ruby.rb

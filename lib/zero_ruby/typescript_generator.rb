@@ -58,10 +58,18 @@ module ZeroRuby
     def collect_input_objects_from_arguments(arguments)
       arguments.each do |_name, config|
         type = config[:type]
-        # Unwrap array types to check element type for InputObjects
-        if type.respond_to?(:primitive) && type.primitive == Array && type.respond_to?(:member)
+
+        # Unwrap optional types first (Sum type: NilClass | actual_type)
+        if sum_type?(type)
+          inner = extract_non_nil_type(type)
+          type = inner if inner
+        end
+
+        # Then unwrap array types to check element type for InputObjects
+        if array_type?(type)
           type = type.member
         end
+
         if input_object_type?(type)
           type_name = extract_type_name(type)
           unless @input_objects.key?(type_name)
