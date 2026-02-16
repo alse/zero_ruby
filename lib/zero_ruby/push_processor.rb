@@ -35,6 +35,11 @@ module ZeroRuby
       results = []
 
       mutations.each_with_index do |mutation_data, index|
+        if mutation_data["name"] == "_zero_cleanupResults"
+          handle_cleanup_results(mutation_data)
+          next
+        end
+
         result = process_mutation_with_lmid(mutation_data, client_group_id, context)
         results << result
       rescue OutOfOrderMutationError => e
@@ -113,31 +118,55 @@ module ZeroRuby
       # Application errors - advance LMID based on phase, return error response
       # Pre-transaction/transaction: LMID advanced separately
       # Post-commit: LMID already committed with transaction
+      error_response = format_error_response(e)
       if phase != :post_commit
-        persist_lmid_on_application_error(client_group_id, client_id)
+        persist_mutation_failure(client_group_id, client_id, mutation_id, error_response)
       end
-      {id: mutation_id_obj, result: format_error_response(e)}
+      {id: mutation_id_obj, result: error_response}
     rescue => e
       if phase == :transaction
         # Infrastructure error (user code errors already wrapped by transact_proc)
         raise TransactionError.new("Transaction failed: #{e.message}")
       else
         # User code error in pre-transaction or post-commit phase
+        error_response = {error: "app", message: e.message}
         if phase != :post_commit
-          persist_lmid_on_application_error(client_group_id, client_id)
+          persist_mutation_failure(client_group_id, client_id, mutation_id, error_response)
         end
-        {id: mutation_id_obj, result: {error: "app", message: e.message}}
+        {id: mutation_id_obj, result: error_response}
       end
     end
 
-    # Persist LMID advancement after an application error.
-    # Called for pre-transaction and transaction errors to prevent replay attacks.
-    def persist_lmid_on_application_error(client_group_id, client_id)
+    # Persist LMID advancement and mutation error result after a failure.
+    # Advances the LMID so the failed mutation is not re-executed on retry,
+    # and writes the error result so clients can read it via replication.
+    def persist_mutation_failure(client_group_id, client_id, mutation_id, error_result)
       lmid_store.transaction do
         lmid_store.fetch_and_increment(client_group_id, client_id)
+        lmid_store.write_mutation_result(client_group_id, client_id, mutation_id, error_result)
       end
     rescue => e
-      warn "Failed to persist LMID after application error: #{e.message}"
+      warn "[ZeroRuby] Failed to persist mutation failure for " \
+           "client_group=#{client_group_id} client=#{client_id} mutation=#{mutation_id}: " \
+           "#{e.class}: #{e.message}"
+    end
+
+    # Handle _zero_cleanupResults mutations by deleting acknowledged results.
+    # Errors are caught and logged as warnings without propagating, matching
+    # the Zero protocol behavior where cleanup failures must not abort the push batch.
+    def handle_cleanup_results(mutation_data)
+      args = mutation_data["args"]
+      args = args.first if args.is_a?(Array)
+      unless args.is_a?(Hash) && args["clientGroupID"]
+        warn "[ZeroRuby] _zero_cleanupResults: invalid args: #{args.inspect}"
+        return
+      end
+      lmid_store.transaction do
+        lmid_store.delete_mutation_results(args)
+      end
+    rescue => e
+      warn "[ZeroRuby] _zero_cleanupResults failed for " \
+           "clientGroupID=#{args&.dig("clientGroupID")}: #{e.class}: #{e.message}"
     end
 
     # Validate LMID against the post-increment value.

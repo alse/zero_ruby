@@ -15,6 +15,16 @@ describe ZeroRuby::LmidStore do
       expect { store.transaction {} }
         .to raise_error(NotImplementedError)
     end
+
+    it "raises NotImplementedError for write_mutation_result" do
+      expect { store.write_mutation_result("group", "client", 1, {}) }
+        .to raise_error(NotImplementedError)
+    end
+
+    it "raises NotImplementedError for delete_mutation_results" do
+      expect { store.delete_mutation_results({}) }
+        .to raise_error(NotImplementedError)
+    end
   end
 end
 

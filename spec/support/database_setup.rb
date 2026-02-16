@@ -39,11 +39,43 @@ module ZeroRuby
               PRIMARY KEY ("clientGroupID", "clientID")
             )
           SQL
+
+          # Create the mutations table matching zero-cache's schema
+          connection.execute(<<~SQL)
+            CREATE TABLE IF NOT EXISTS zero_0.mutations (
+              "clientGroupID" TEXT NOT NULL,
+              "clientID" TEXT NOT NULL,
+              "mutationID" BIGINT NOT NULL,
+              "result" JSON NOT NULL,
+              PRIMARY KEY ("clientGroupID", "clientID", "mutationID")
+            )
+          SQL
         end
 
         def truncate!
-          ActiveRecord::Base.connection.execute("TRUNCATE TABLE zero_0.clients")
+          ActiveRecord::Base.connection.execute("TRUNCATE TABLE zero_0.clients, zero_0.mutations")
         end
+      end
+    end
+
+    module MutationResultHelpers
+      def get_mutation_result(client_group_id, client_id, mutation_id)
+        sql = ActiveRecord::Base.sanitize_sql_array([<<~SQL.squish, {client_group_id:, client_id:, mutation_id:}])
+          SELECT "result"::text FROM zero_0.mutations
+          WHERE "clientGroupID" = :client_group_id
+          AND "clientID" = :client_id
+          AND "mutationID" = :mutation_id
+        SQL
+        ActiveRecord::Base.connection.select_value(sql)
+      end
+
+      def insert_mutation_result(client_group_id, client_id, mutation_id, result)
+        result_json = result.to_json
+        sql = ActiveRecord::Base.sanitize_sql_array([<<~SQL.squish, {client_group_id:, client_id:, mutation_id:, result: result_json}])
+          INSERT INTO zero_0.mutations ("clientGroupID", "clientID", "mutationID", "result")
+          VALUES (:client_group_id, :client_id, :mutation_id, :result::text::json)
+        SQL
+        ActiveRecord::Base.connection.execute(sql)
       end
     end
   end

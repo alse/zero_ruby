@@ -708,8 +708,8 @@ describe ZeroRuby::PushProcessor do
     end
   end
 
-  describe "persist_lmid_on_application_error failure" do
-    it "logs warning but returns error response when LMID persistence fails" do
+  describe "persist_mutation_failure failure" do
+    it "logs warning but returns error response when persistence fails" do
       # Stub the store to fail on the second transaction (the error recovery one)
       call_count = 0
       allow(store).to receive(:transaction).and_wrap_original do |original, &block|
@@ -718,7 +718,7 @@ describe ZeroRuby::PushProcessor do
           # First call: normal transaction that will be rolled back due to app error
           original.call(&block)
         else
-          # Second call: persist_lmid_on_application_error - simulate failure
+          # Second call: persist_mutation_failure - simulate failure
           raise StandardError.new("Connection lost")
         end
       end
@@ -735,12 +735,184 @@ describe ZeroRuby::PushProcessor do
       result = nil
       expect {
         result = processor.process(push_data, context)
-      }.to output(/Failed to persist LMID after application error/).to_stderr
+      }.to output(/\[ZeroRuby\] Failed to persist mutation failure/).to_stderr
 
       # Should still return the mutation error response (not raise)
       expect(result[:mutations]).to be_a(Array)
       expect(result[:mutations][0][:result][:error]).to eq("app")
       expect(result[:mutations][0][:result][:message]).to eq("Auto transact error")
+    end
+  end
+
+  describe "mutation results persistence" do
+    it "writes error result to zero_0.mutations table on failure" do
+      push_data = {
+        "pushVersion" => 1,
+        "clientGroupID" => "group-persist",
+        "mutations" => [
+          {"id" => 1, "clientID" => "client-persist", "name" => "items.fail", "args" => [{"id" => "item-1"}]}
+        ]
+      }
+
+      result = processor.process(push_data, context)
+
+      expect(result[:mutations][0][:result][:error]).to eq("app")
+
+      row = get_mutation_result("group-persist", "client-persist", 1)
+      expect(row).not_to be_nil
+      parsed = JSON.parse(row)
+      expect(parsed["error"]).to eq("app")
+      expect(parsed["message"]).to eq("Permanent error")
+    end
+
+    it "does NOT write to mutations table on success" do
+      push_data = {
+        "pushVersion" => 1,
+        "clientGroupID" => "group-persist-ok",
+        "mutations" => [
+          {"id" => 1, "clientID" => "client-persist-ok", "name" => "items.create", "args" => [{"id" => "item-1"}]}
+        ]
+      }
+
+      result = processor.process(push_data, context)
+
+      expect(result[:mutations][0][:result]).to eq(success)
+
+      row = get_mutation_result("group-persist-ok", "client-persist-ok", 1)
+      expect(row).to be_nil
+    end
+
+    it "does NOT write to mutations table on post-commit error" do
+      push_data = {
+        "pushVersion" => 1,
+        "clientGroupID" => "group-persist-post",
+        "mutations" => [
+          {"id" => 1, "clientID" => "client-persist-post", "name" => "items.post_error", "args" => [{"id" => "item-1"}]}
+        ]
+      }
+
+      result = processor.process(push_data, context)
+
+      expect(result[:mutations][0][:result][:error]).to eq("app")
+
+      row = get_mutation_result("group-persist-post", "client-persist-post", 1)
+      expect(row).to be_nil
+    end
+
+    it "writes error result for non-ZeroRuby exceptions" do
+      push_data = {
+        "pushVersion" => 1,
+        "clientGroupID" => "group-persist-generic",
+        "mutations" => [
+          {"id" => 1, "clientID" => "client-persist-generic", "name" => "items.generic_exception", "args" => [{"id" => "item-1"}]}
+        ]
+      }
+
+      result = processor.process(push_data, context)
+
+      expect(result[:mutations][0][:result][:error]).to eq("app")
+
+      row = get_mutation_result("group-persist-generic", "client-persist-generic", 1)
+      expect(row).not_to be_nil
+      parsed = JSON.parse(row)
+      expect(parsed["error"]).to eq("app")
+      expect(parsed["message"]).to eq("Something unexpected happened")
+    end
+  end
+
+  describe "_zero_cleanupResults" do
+    it "deletes mutation results (single/legacy)" do
+      # Insert test rows
+      insert_mutation_result("group-cleanup", "client-cleanup", 1, {error: "app", message: "err1"})
+      insert_mutation_result("group-cleanup", "client-cleanup", 2, {error: "app", message: "err2"})
+      insert_mutation_result("group-cleanup", "client-cleanup", 3, {error: "app", message: "err3"})
+
+      push_data = {
+        "pushVersion" => 1,
+        "clientGroupID" => "group-cleanup",
+        "mutations" => [
+          {
+            "id" => 1, "clientID" => "client-cleanup",
+            "name" => "_zero_cleanupResults",
+            "args" => [{"clientGroupID" => "group-cleanup", "clientID" => "client-cleanup", "upToMutationID" => 2}]
+          }
+        ]
+      }
+
+      processor.process(push_data, context)
+
+      # Mutations 1 and 2 should be deleted, 3 should remain
+      expect(get_mutation_result("group-cleanup", "client-cleanup", 1)).to be_nil
+      expect(get_mutation_result("group-cleanup", "client-cleanup", 2)).to be_nil
+      expect(get_mutation_result("group-cleanup", "client-cleanup", 3)).not_to be_nil
+    end
+
+    it "deletes mutation results (bulk)" do
+      insert_mutation_result("group-bulk", "client-a", 1, {error: "app", message: "err1"})
+      insert_mutation_result("group-bulk", "client-b", 1, {error: "app", message: "err2"})
+      insert_mutation_result("group-bulk", "client-c", 1, {error: "app", message: "err3"})
+
+      push_data = {
+        "pushVersion" => 1,
+        "clientGroupID" => "group-bulk",
+        "mutations" => [
+          {
+            "id" => 1, "clientID" => "client-a",
+            "name" => "_zero_cleanupResults",
+            "args" => [{"type" => "bulk", "clientGroupID" => "group-bulk", "clientIDs" => ["client-a", "client-b"]}]
+          }
+        ]
+      }
+
+      processor.process(push_data, context)
+
+      expect(get_mutation_result("group-bulk", "client-a", 1)).to be_nil
+      expect(get_mutation_result("group-bulk", "client-b", 1)).to be_nil
+      expect(get_mutation_result("group-bulk", "client-c", 1)).not_to be_nil
+    end
+
+    it "doesn't produce a response in results array" do
+      push_data = {
+        "pushVersion" => 1,
+        "clientGroupID" => "group-noresp",
+        "mutations" => [
+          {
+            "id" => 1, "clientID" => "client-noresp",
+            "name" => "_zero_cleanupResults",
+            "args" => [{"clientGroupID" => "group-noresp", "clientID" => "client-noresp", "upToMutationID" => 0}]
+          }
+        ]
+      }
+
+      result = processor.process(push_data, context)
+
+      expect(result[:mutations]).to eq([])
+    end
+
+    it "swallows errors and continues batch" do
+      allow(store).to receive(:delete_mutation_results).and_raise(StandardError.new("delete failed"))
+
+      push_data = {
+        "pushVersion" => 1,
+        "clientGroupID" => "group-swallow",
+        "mutations" => [
+          {
+            "id" => 1, "clientID" => "client-swallow",
+            "name" => "_zero_cleanupResults",
+            "args" => [{"clientGroupID" => "group-swallow", "clientID" => "client-swallow", "upToMutationID" => 1}]
+          },
+          {"id" => 1, "clientID" => "client-swallow", "name" => "items.create", "args" => [{"id" => "item-1"}]}
+        ]
+      }
+
+      result = nil
+      expect {
+        result = processor.process(push_data, context)
+      }.to output(/\[ZeroRuby\] _zero_cleanupResults failed/).to_stderr
+
+      # Batch should continue — the create mutation should still be processed
+      expect(result[:mutations].length).to eq(1)
+      expect(result[:mutations][0][:result]).to eq(success)
     end
   end
 

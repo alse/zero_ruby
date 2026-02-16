@@ -39,5 +39,25 @@ module ZeroRuby
     def transaction(&block)
       raise NotImplementedError, "#{self.class}#transaction must be implemented"
     end
+
+    # Persist a mutation result so clients can read it via replication.
+    # Used to surface error results back to the client.
+    #
+    # @param client_group_id [String] The client group ID
+    # @param client_id [String] The client ID
+    # @param mutation_id [Integer] The mutation ID
+    # @param result [Hash, String] The mutation result to persist
+    def write_mutation_result(client_group_id, client_id, mutation_id, result)
+      raise NotImplementedError, "#{self.class}#write_mutation_result must be implemented"
+    end
+
+    # Delete mutation results, called by _zero_cleanupResults to remove acknowledged results.
+    #
+    # @param args [Hash] Cleanup arguments from the _zero_cleanupResults mutation.
+    #   For single/legacy format: { "clientGroupID" => String, "clientID" => String, "upToMutationID" => Integer }
+    #   For bulk format: { "type" => "bulk", "clientGroupID" => String, "clientIDs" => Array<String> }
+    def delete_mutation_results(args)
+      raise NotImplementedError, "#{self.class}#delete_mutation_results must be implemented"
+    end
   end
 end

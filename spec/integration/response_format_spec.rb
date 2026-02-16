@@ -275,6 +275,37 @@ describe "Response Format Integration" do
       })
     end
 
+    it "writes error result to zero_0.mutations for app errors" do
+      push_data = make_push([{
+        "id" => 1,
+        "clientID" => "client-persist",
+        "name" => "posts.error",
+        "args" => [{"id" => "post-1"}]
+      }])
+
+      ResponseFormatSchema.execute(push_data, context: context, lmid_store: lmid_store)
+
+      row = get_mutation_result("group-1", "client-persist", 1)
+      expect(row).not_to be_nil
+      parsed = JSON.parse(row)
+      expect(parsed["error"]).to eq("app")
+      expect(parsed["message"]).to eq("User not authorized to create posts")
+    end
+
+    it "does NOT write to zero_0.mutations for successful mutations" do
+      push_data = make_push([{
+        "id" => 1,
+        "clientID" => "client-no-persist",
+        "name" => "posts.create",
+        "args" => [{"id" => "post-1"}]
+      }])
+
+      ResponseFormatSchema.execute(push_data, context: context, lmid_store: lmid_store)
+
+      row = get_mutation_result("group-1", "client-no-persist", 1)
+      expect(row).to be_nil
+    end
+
     it "returns application error (generic)" do
       push_data = make_push([{
         "id" => 1,

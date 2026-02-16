@@ -1,6 +1,6 @@
 # zero_ruby
 
-A Ruby gem for handling [Zero](https://zero.rocicorp.dev/) mutations with type safety, validation, and full protocol support.
+A Ruby gem for handling [Zero](https://zero.rocicorp.dev/) mutations with type safety, validation, and full protocol support. Compatible with Zero 0.25.12.
 
 ## Features
 

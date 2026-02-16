@@ -24,6 +24,8 @@ RSpec.configure do |config|
   config.order = :random
   Kernel.srand config.seed
 
+  config.include ZeroRuby::TestHelpers::MutationResultHelpers
+
   # Truncate tables before each test for isolation
   config.before(:each) do
     ZeroRuby::TestHelpers::DatabaseSetup.truncate!

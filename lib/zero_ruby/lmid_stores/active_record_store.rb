@@ -52,6 +52,53 @@ module ZeroRuby
         model_class.transaction(&block)
       end
 
+      # Write a mutation result to the zero_0.mutations table.
+      #
+      # @param client_group_id [String] The client group ID
+      # @param client_id [String] The client ID
+      # @param mutation_id [Integer] The mutation ID
+      # @param result [Hash, String] The mutation result. Hashes are serialized to JSON for storage.
+      def write_mutation_result(client_group_id, client_id, mutation_id, result)
+        result_json = begin
+          result.is_a?(String) ? result : result.to_json
+        rescue JSON::GeneratorError, Encoding::UndefinedConversionError
+          {error: "app", message: "Error result could not be serialized"}.to_json
+        end
+        sql = model_class.sanitize_sql_array([<<~SQL.squish, {client_group_id:, client_id:, mutation_id:, result: result_json}])
+          INSERT INTO zero_0.mutations ("clientGroupID", "clientID", "mutationID", "result")
+          VALUES (:client_group_id, :client_id, :mutation_id, :result::text::json)
+        SQL
+
+        model_class.connection.execute(sql)
+      end
+
+      # Delete mutation results from the zero_0.mutations table.
+      #
+      # @param args [Hash] Cleanup arguments
+      def delete_mutation_results(args)
+        client_group_id = args["clientGroupID"]
+
+        sql = if args["type"] == "bulk"
+          client_ids = args["clientIDs"]
+          model_class.sanitize_sql_array([<<~SQL.squish, {client_group_id:}])
+            DELETE FROM zero_0.mutations
+            WHERE "clientGroupID" = :client_group_id
+            AND "clientID" = ANY(ARRAY[#{client_ids.map { |id| model_class.connection.quote(id) }.join(",")}])
+          SQL
+        else
+          client_id = args["clientID"]
+          up_to_mutation_id = args["upToMutationID"]
+          model_class.sanitize_sql_array([<<~SQL.squish, {client_group_id:, client_id:, up_to_mutation_id:}])
+            DELETE FROM zero_0.mutations
+            WHERE "clientGroupID" = :client_group_id
+            AND "clientID" = :client_id
+            AND "mutationID" <= :up_to_mutation_id
+          SQL
+        end
+
+        model_class.connection.execute(sql)
+      end
+
       private
 
       def default_model_class
