@@ -89,7 +89,13 @@ module ZeroRuby
         result = lmid_store.transaction do
           last_mutation_id = lmid_store.fetch_and_increment(client_group_id, client_id)
           check_lmid!(client_id, mutation_id, last_mutation_id)
-          user_block.call
+          begin
+            user_block.call
+          rescue ZeroRuby::Error
+            raise
+          rescue => e
+            raise ZeroRuby::Error.new(e.message)
+          end
         end
         phase = :post_commit
         result
@@ -112,8 +118,16 @@ module ZeroRuby
       end
       {id: mutation_id_obj, result: format_error_response(e)}
     rescue => e
-      # Unexpected errors - wrap and bubble up as batch-terminating
-      raise TransactionError.new("Transaction failed: #{e.message}")
+      if phase == :transaction
+        # Infrastructure error (user code errors already wrapped by transact_proc)
+        raise TransactionError.new("Transaction failed: #{e.message}")
+      else
+        # User code error in pre-transaction or post-commit phase
+        if phase != :post_commit
+          persist_lmid_on_application_error(client_group_id, client_id)
+        end
+        {id: mutation_id_obj, result: {error: "app", message: e.message}}
+      end
     end
 
     # Persist LMID advancement after an application error.

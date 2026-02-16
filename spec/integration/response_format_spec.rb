@@ -466,7 +466,7 @@ describe "Response Format Integration" do
       })
     end
 
-    it "wraps unexpected errors as TransactionError" do
+    it "wraps unexpected errors as per-mutation app error" do
       push_data = make_push([{
         "id" => 1,
         "clientID" => "client-abc",
@@ -477,11 +477,12 @@ describe "Response Format Integration" do
       result = ResponseFormatSchema.execute(push_data, context: context, lmid_store: lmid_store)
 
       expect(result).to eq({
-        kind: "PushFailed",
-        origin: "server",
-        reason: "database",
-        message: "Transaction failed: Unexpected kaboom",
-        mutationIDs: [{id: 1, clientID: "client-abc"}]
+        mutations: [
+          {
+            id: {id: 1, clientID: "client-abc"},
+            result: {error: "app", message: "Unexpected kaboom"}
+          }
+        ]
       })
     end
 

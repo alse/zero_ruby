@@ -567,7 +567,7 @@ describe ZeroRuby::PushProcessor do
   end
 
   describe "database and system error handling" do
-    it "converts ActiveRecord::StatementInvalid to PushFailed" do
+    it "converts ActiveRecord::StatementInvalid to per-mutation app error" do
       push_data = {
         "pushVersion" => 1,
         "clientGroupID" => "group-db",
@@ -578,15 +578,12 @@ describe ZeroRuby::PushProcessor do
 
       result = processor.process(push_data, context)
 
-      expect(result[:kind]).to eq("PushFailed")
-      expect(result[:origin]).to eq("server")
-      expect(result[:reason]).to eq("database")
-      expect(result[:message]).to include("Transaction failed")
-      expect(result[:message]).to include("UniqueViolation")
-      expect(result[:mutationIDs]).to eq([{id: 1, clientID: "client-stmt"}])
+      expect(result[:mutations].length).to eq(1)
+      expect(result[:mutations][0][:result][:error]).to eq("app")
+      expect(result[:mutations][0][:result][:message]).to include("UniqueViolation")
     end
 
-    it "converts generic exceptions to PushFailed" do
+    it "converts generic exceptions to per-mutation app error" do
       push_data = {
         "pushVersion" => 1,
         "clientGroupID" => "group-db",
@@ -597,12 +594,9 @@ describe ZeroRuby::PushProcessor do
 
       result = processor.process(push_data, context)
 
-      expect(result[:kind]).to eq("PushFailed")
-      expect(result[:origin]).to eq("server")
-      expect(result[:reason]).to eq("database")
-      expect(result[:message]).to include("Transaction failed")
-      expect(result[:message]).to include("Something unexpected")
-      expect(result[:mutationIDs]).to eq([{id: 1, clientID: "client-generic"}])
+      expect(result[:mutations].length).to eq(1)
+      expect(result[:mutations][0][:result][:error]).to eq("app")
+      expect(result[:mutations][0][:result][:message]).to eq("Something unexpected happened")
     end
 
     it "handles TransactionError and returns PushFailed with unprocessed mutations" do
@@ -629,7 +623,7 @@ describe ZeroRuby::PushProcessor do
     end
 
     context "with skip_auto_transaction (manual transact)" do
-      it "converts ActiveRecord::StatementInvalid to PushFailed" do
+      it "converts ActiveRecord::StatementInvalid to per-mutation app error" do
         push_data = {
           "pushVersion" => 1,
           "clientGroupID" => "group-manual",
@@ -640,12 +634,12 @@ describe ZeroRuby::PushProcessor do
 
         result = processor.process(push_data, context)
 
-        expect(result[:kind]).to eq("PushFailed")
-        expect(result[:reason]).to eq("database")
-        expect(result[:message]).to include("ForeignKeyViolation")
+        expect(result[:mutations].length).to eq(1)
+        expect(result[:mutations][0][:result][:error]).to eq("app")
+        expect(result[:mutations][0][:result][:message]).to include("ForeignKeyViolation")
       end
 
-      it "converts generic exceptions to PushFailed" do
+      it "converts generic exceptions to per-mutation app error" do
         push_data = {
           "pushVersion" => 1,
           "clientGroupID" => "group-manual",
@@ -656,10 +650,61 @@ describe ZeroRuby::PushProcessor do
 
         result = processor.process(push_data, context)
 
-        expect(result[:kind]).to eq("PushFailed")
-        expect(result[:reason]).to eq("database")
-        expect(result[:message]).to include("Manual unexpected error")
+        expect(result[:mutations].length).to eq(1)
+        expect(result[:mutations][0][:result][:error]).to eq("app")
+        expect(result[:mutations][0][:result][:message]).to eq("Manual unexpected error")
       end
+    end
+
+    it "keeps infrastructure errors fatal when transaction itself fails" do
+      allow(store).to receive(:transaction).and_raise(StandardError.new("connection refused"))
+
+      push_data = {
+        "pushVersion" => 1,
+        "clientGroupID" => "group-infra",
+        "mutations" => [
+          {"id" => 1, "clientID" => "client-infra", "name" => "items.create", "args" => [{"id" => "item-1"}]}
+        ]
+      }
+
+      result = processor.process(push_data, context)
+
+      expect(result[:kind]).to eq("PushFailed")
+      expect(result[:reason]).to eq("database")
+      expect(result[:message]).to include("connection refused")
+    end
+
+    it "continues batch after user code error" do
+      push_data = {
+        "pushVersion" => 1,
+        "clientGroupID" => "group-batch",
+        "mutations" => [
+          {"id" => 1, "clientID" => "client-batch", "name" => "items.generic_exception", "args" => [{"id" => "item-1"}]},
+          {"id" => 2, "clientID" => "client-batch", "name" => "items.create", "args" => [{"id" => "item-2"}]}
+        ]
+      }
+
+      result = processor.process(push_data, context)
+
+      expect(result[:mutations].length).to eq(2)
+      expect(result[:mutations][0][:result][:error]).to eq("app")
+      expect(result[:mutations][0][:result][:message]).to eq("Something unexpected happened")
+      expect(result[:mutations][1][:result]).to eq({})
+    end
+
+    it "advances LMID on non-ZeroRuby user error" do
+      push_data = {
+        "pushVersion" => 1,
+        "clientGroupID" => "group-lmid",
+        "mutations" => [
+          {"id" => 1, "clientID" => "client-lmid-adv", "name" => "items.generic_exception", "args" => [{"id" => "item-1"}]}
+        ]
+      }
+
+      result = processor.process(push_data, context)
+
+      expect(result[:mutations][0][:result][:error]).to eq("app")
+      expect(get_lmid("group-lmid", "client-lmid-adv")).to eq(1)
     end
   end
 
