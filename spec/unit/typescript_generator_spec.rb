@@ -432,3 +432,41 @@ describe "TypeScript Generator InputObjects in optional arrays" do
     expect(output).to include("workStyles?: TSGenWorkStyleInput[] | null;")
   end
 end
+
+# Default-wrapped InputObjects must still be discovered and emitted
+class TSGenDefaultedInner < ZeroRuby::InputObject
+  argument :inner_name, ZeroRuby::Types::String
+end
+
+class TSGenDefaultedArrayElement < ZeroRuby::InputObject
+  argument :tag, ZeroRuby::Types::String
+end
+
+class TSDefaultedInputMutation < ZeroRuby::Mutation
+  argument :solo, TSGenDefaultedInner.default(
+    TSGenDefaultedInner.new(inner_name: "x"),
+    shared: true
+  )
+  argument :many, ZeroRuby::Types::Array(TSGenDefaultedArrayElement).default([].freeze)
+
+  def execute
+  end
+end
+
+class TSDefaultedInputSchema < ZeroRuby::Schema
+  mutation "wrap.create", handler: TSDefaultedInputMutation
+end
+
+describe "TypeScript Generator with Default-wrapped InputObjects" do
+  let(:output) { TSDefaultedInputSchema.to_typescript }
+
+  it "emits the interface for a Default-wrapped InputObject argument" do
+    expect(output).to include("export interface TSGenDefaultedInner {")
+    expect(output).to include("innerName: string;")
+  end
+
+  it "emits the interface for a Default-wrapped Array(InputObject) argument" do
+    expect(output).to include("export interface TSGenDefaultedArrayElement {")
+    expect(output).to include("tag: string;")
+  end
+end

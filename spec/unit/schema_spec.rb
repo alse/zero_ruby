@@ -66,6 +66,30 @@ class NestedArgsSchema < ZeroRuby::Schema
   mutation "nested.action", handler: NestedArgsMutation
 end
 
+class HashArgMutation < ZeroRuby::Mutation
+  argument :spec, ZeroRuby::Types::Hash.optional
+
+  @@last_spec = nil
+
+  def execute(spec: nil, **)
+    transact do
+      @@last_spec = spec
+    end
+  end
+
+  def self.last_spec
+    @@last_spec
+  end
+
+  def self.reset!
+    @@last_spec = nil
+  end
+end
+
+class HashArgSchema < ZeroRuby::Schema
+  mutation "designs.update", handler: HashArgMutation
+end
+
 # Test mutation with constraints for Dry error conversion tests
 class ConstrainedMutation < ZeroRuby::Mutation
   argument :title, ZeroRuby::Types::String.constrained(max_size: 10)
@@ -205,6 +229,30 @@ describe ZeroRuby::Schema do
 
       NestedArgsSchema.execute_mutation(mutation_data, context, &transact)
       expect(NestedArgsMutation.last_nested_data).to eq("test-value")
+    end
+  end
+
+  describe "free-form Hash arguments" do
+    it "preserves camelCase keys inside Hash-typed args" do
+      HashArgMutation.reset!
+      mutation_data = {
+        "name" => "designs.update",
+        "args" => [{
+          "spec" => {
+            "elements" => {
+              "card" => {"props" => {"aspectRatio" => 1.5, "imageUrl" => "x"}}
+            }
+          }
+        }]
+      }
+
+      HashArgSchema.execute_mutation(mutation_data, context, &transact)
+
+      expect(HashArgMutation.last_spec).to eq({
+        "elements" => {
+          "card" => {"props" => {"aspectRatio" => 1.5, "imageUrl" => "x"}}
+        }
+      })
     end
   end
 

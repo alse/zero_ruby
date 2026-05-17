@@ -13,6 +13,8 @@ require_relative "zero_ruby/type_names"
 # Core classes
 require_relative "zero_ruby/input_object"
 require_relative "zero_ruby/mutation"
+require_relative "zero_ruby/type_introspection"
+require_relative "zero_ruby/key_transformer"
 require_relative "zero_ruby/schema"
 require_relative "zero_ruby/typescript_generator"
 

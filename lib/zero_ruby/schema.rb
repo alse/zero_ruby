@@ -2,6 +2,7 @@
 
 require_relative "errors"
 require_relative "error_formatter"
+require_relative "key_transformer"
 
 module ZeroRuby
   # Schema class for registering and processing Zero mutations.
@@ -102,7 +103,7 @@ module ZeroRuby
         raise MutationNotFoundError.new(name) unless handler
 
         raw_args = extract_args(mutation_data)
-        params = transform_keys(raw_args)
+        params = KeyTransformer.transform(raw_args, handler.arguments)
 
         handler.new(params, context).call(&transact)
       rescue Dry::Struct::Error => e
@@ -147,25 +148,6 @@ module ZeroRuby
 
         # Zero sends args as an array with a single object
         args.is_a?(Array) ? (args.first || {}) : args
-      end
-
-      # Transform camelCase string keys to snake_case strings (deep).
-      # Keys are kept as strings to prevent symbol table DoS attacks.
-      # Symbolization happens later in coerce_and_validate! using schema-defined keys.
-      # @param object [Object] The object to transform
-      # @return [Object] Transformed object with string keys
-      def transform_keys(object)
-        case object
-        when Hash
-          object.each_with_object({}) do |(key, value), result|
-            new_key = key.to_s.gsub(/([A-Z])/, '_\1').downcase.delete_prefix("_")
-            result[new_key] = transform_keys(value)
-          end
-        when Array
-          object.map { |e| transform_keys(e) }
-        else
-          object
-        end
       end
     end
   end
