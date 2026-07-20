@@ -249,6 +249,7 @@ describe "Response Format Integration" do
       result = ResponseFormatSchema.execute(push_data, context: context, lmid_store: lmid_store)
 
       expect(result).to eq({
+        kind: "MutateResponse",
         mutations: [
           {id: {id: 1, clientID: "client-abc"}, result: {}}
         ]
@@ -266,6 +267,7 @@ describe "Response Format Integration" do
       result = ResponseFormatSchema.execute(push_data, context: context, lmid_store: lmid_store)
 
       expect(result).to eq({
+        kind: "MutateResponse",
         mutations: [
           {
             id: {id: 1, clientID: "client-abc"},
@@ -317,6 +319,7 @@ describe "Response Format Integration" do
       result = ResponseFormatSchema.execute(push_data, context: context, lmid_store: lmid_store)
 
       expect(result).to eq({
+        kind: "MutateResponse",
         mutations: [
           {
             id: {id: 1, clientID: "client-abc"},
@@ -340,6 +343,7 @@ describe "Response Format Integration" do
       result = ResponseFormatSchema.execute(push_data, context: context, lmid_store: lmid_store)
 
       expect(result).to eq({
+        kind: "MutateResponse",
         mutations: [
           {
             id: {id: 1, clientID: "client-abc"},
@@ -364,6 +368,7 @@ describe "Response Format Integration" do
       result = ResponseFormatSchema.execute(push_data, context: context, lmid_store: lmid_store)
 
       expect(result).to eq({
+        kind: "MutateResponse",
         mutations: [
           {
             id: {id: 1, clientID: "client-abc"},
@@ -401,6 +406,7 @@ describe "Response Format Integration" do
       result = ResponseFormatSchema.execute(push_data, context: context, lmid_store: lmid_store)
 
       expect(result).to eq({
+        kind: "MutateResponse",
         mutations: [
           {
             id: {id: 3, clientID: "client-abc"},
@@ -424,6 +430,7 @@ describe "Response Format Integration" do
       result = ResponseFormatSchema.execute(push_data, context: context, lmid_store: lmid_store)
 
       expect(result).to eq({
+        kind: "MutateResponse",
         mutations: [
           {
             id: {id: 1, clientID: "client-abc"},
@@ -463,6 +470,7 @@ describe "Response Format Integration" do
       result = ResponseFormatSchema.execute(push_data, context: context, lmid_store: lmid_store)
 
       expect(result).to eq({
+        kind: "MutateResponse",
         mutations: [
           {id: {id: 1, clientID: "client-1"}, result: {}},
           {
@@ -508,6 +516,7 @@ describe "Response Format Integration" do
       result = ResponseFormatSchema.execute(push_data, context: context, lmid_store: lmid_store)
 
       expect(result).to eq({
+        kind: "MutateResponse",
         mutations: [
           {
             id: {id: 1, clientID: "client-abc"},
@@ -528,6 +537,7 @@ describe "Response Format Integration" do
       result = ResponseFormatSchema.execute(push_data, context: context, lmid_store: lmid_store)
 
       expect(result).to eq({
+        kind: "MutateResponse",
         mutations: [
           {
             id: {id: 1, clientID: "client-abc"},

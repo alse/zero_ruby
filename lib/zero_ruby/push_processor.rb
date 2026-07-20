@@ -15,20 +15,30 @@ module ZeroRuby
   # @see https://github.com/rocicorp/mono/blob/main/packages/zero-server/src/process-mutations.ts
   # @see https://github.com/rocicorp/mono/blob/main/packages/zero-server/src/zql-database.ts
   class PushProcessor
-    attr_reader :schema, :lmid_store
+    attr_reader :schema, :lmid_store, :user_id, :upstream_schema
 
     # @param schema [Class] The schema class for mutation processing
     # @param lmid_store [LmidStore] The LMID store instance
-    def initialize(schema:, lmid_store:)
+    # @param user_id [String, nil] Authenticated user ID echoed in MutateResponse.
+    #   Should be derived from server-verified credentials (e.g. a JWT subject),
+    #   not from request body data.
+    # @param upstream_schema [String] Postgres schema name owned by zero-cache.
+    #   Defaults to "zero_0" (the default ZERO_APP_ID=zero, ZERO_SHARD_NUM=0).
+    #   zero-cache sends the actual value via the "schema" query parameter.
+    def initialize(schema:, lmid_store:, user_id: nil, upstream_schema: "zero_0")
       @schema = schema
       @lmid_store = lmid_store
+      @user_id = user_id
+      @upstream_schema = upstream_schema
     end
 
     # Process a Zero push request
     #
     # @param push_data [Hash] The parsed push request body
     # @param context [Hash] Context to pass to mutations
-    # @return [Hash] The response hash
+    # @return [Hash] The response hash. On success:
+    #   {kind: "MutateResponse", mutations: [...], userID: "..."} (userID omitted when nil).
+    #   On failure: {kind: "PushFailed", ...}.
     def process(push_data, context)
       client_group_id = push_data["clientGroupID"]
       mutations = push_data["mutations"] || []
@@ -64,7 +74,9 @@ module ZeroRuby
         }
       end
 
-      {mutations: results}
+      response = {kind: "MutateResponse", mutations: results}
+      response[:userID] = @user_id unless @user_id.nil?
+      response
     end
 
     private
@@ -92,7 +104,7 @@ module ZeroRuby
       transact_proc = proc { |&user_block|
         phase = :transaction
         result = lmid_store.transaction do
-          last_mutation_id = lmid_store.fetch_and_increment(client_group_id, client_id)
+          last_mutation_id = lmid_store.fetch_and_increment(client_group_id, client_id, upstream_schema: @upstream_schema)
           check_lmid!(client_id, mutation_id, last_mutation_id)
           begin
             user_block.call
@@ -140,15 +152,23 @@ module ZeroRuby
     # Persist LMID advancement and mutation error result after a failure.
     # Advances the LMID so the failed mutation is not re-executed on retry,
     # and writes the error result so clients can read it via replication.
+    #
+    # Failures here are escalated to TransactionError so the batch aborts with
+    # PushFailed{database}, matching the TS reference implementation. Silently
+    # losing the LMID advance would desync the client.
     def persist_mutation_failure(client_group_id, client_id, mutation_id, error_result)
       lmid_store.transaction do
-        lmid_store.fetch_and_increment(client_group_id, client_id)
-        lmid_store.write_mutation_result(client_group_id, client_id, mutation_id, error_result)
+        lmid_store.fetch_and_increment(client_group_id, client_id, upstream_schema: @upstream_schema)
+        lmid_store.write_mutation_result(client_group_id, client_id, mutation_id, error_result, upstream_schema: @upstream_schema)
       end
+    rescue ZeroRuby::Error
+      raise
     rescue => e
-      warn "[ZeroRuby] Failed to persist mutation failure for " \
-           "client_group=#{client_group_id} client=#{client_id} mutation=#{mutation_id}: " \
-           "#{e.class}: #{e.message}"
+      raise TransactionError.new(
+        "Failed to persist mutation failure for " \
+        "client_group=#{client_group_id} client=#{client_id} mutation=#{mutation_id}: " \
+        "#{e.class}: #{e.message}"
+      )
     end
 
     # Handle _zero_cleanupResults mutations by deleting acknowledged results.
@@ -162,7 +182,7 @@ module ZeroRuby
         return
       end
       lmid_store.transaction do
-        lmid_store.delete_mutation_results(args)
+        lmid_store.delete_mutation_results(args, upstream_schema: @upstream_schema)
       end
     rescue => e
       warn "[ZeroRuby] _zero_cleanupResults failed for " \

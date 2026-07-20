@@ -1,6 +1,8 @@
 # zero_ruby
 
-A Ruby gem for handling [Zero](https://zero.rocicorp.dev/) mutations with type safety, validation, and full protocol support. Compatible with Zero 0.25.12.
+A Ruby gem for handling [Zero](https://zero.rocicorp.dev/) mutations with type safety, validation, and full protocol support. Compatible with **Zero 1.5+**.
+
+> **Rollout note:** the 1.5 response shape (`MutateResponse` + `userID` echo) is not parseable by `zero-cache` 1.4 and earlier. Deploy `zero-cache@1.5+` before upgrading this gem.
 
 ## Features
 
@@ -59,7 +61,7 @@ class ZeroController < ApplicationController
   # Skip CSRF for API endpoint
   # skip_before_action :verify_authenticity_token
 
-  def push
+  def mutate
     if request.get?
       # GET requests return TypeScript type definitions
       render plain: ZeroSchema.to_typescript, content_type: "text/plain; charset=utf-8"
@@ -67,10 +69,14 @@ class ZeroController < ApplicationController
       # POST requests process mutations
       body = JSON.parse(request.body.read)
 
-      # Build context hash with whatever your mutations need.
-      # Access in mutations via ctx[:current_user]
+      # Build context hash. The gem reads three special keys:
+      #   :current_user      - used to derive userID echoed in MutateResponse
+      #   :user_id           - takes precedence over current_user when set
+      #   :upstream_schema   - Postgres schema owned by zero-cache (?schema= param)
+      # Everything else passes through verbatim as ctx[...] for your mutations.
       context = {
         current_user: current_user,
+        upstream_schema: params[:schema]
       }
 
       result = ZeroSchema.execute(body, context: context)
@@ -90,8 +96,19 @@ end
 
 ```ruby
 # config/routes.rb
-match '/zero/push', to: 'zero#push', via: [:get, :post]
+# The path is up to you - point ZERO_MUTATE_URL at it.
+match '/zero/mutate', to: 'zero#mutate', via: [:get, :post]
 ```
+
+#### Authenticating zero-cache requests
+
+`zero-cache` sends three classes of credentials to your endpoint:
+
+- `Authorization: Bearer <token>` — the client's auth token, if any. Verify it in your controller (or via a `before_action`) and populate `current_user` from the verified subject. **Do not** trust `userID` derived from the request body — the gem only echoes what your controller passes via `context`.
+- `Cookie: …` — forwarded if `ZERO_MUTATE_FORWARD_COOKIES=true`. Use your normal Rails session.
+- `X-Api-Key: <secret>` — set if you configured `ZERO_MUTATE_API_KEY` on zero-cache. Validate it (constant-time compare) to ensure the request really came from your zero-cache.
+
+Query params: zero-cache appends `?schema=<upstream_schema>&appID=<appID>` on every request. The `schema` value goes into `context[:upstream_schema]` so the gem can locate the correct `<schema>.clients` / `<schema>.mutations` tables.
 
 ## Define custom input types (optional)
 
@@ -126,18 +143,18 @@ end
 
 ## TypeScript type generation
 
-ZeroRuby generates TypeScript type definitions from your Ruby mutations. GET requests to `/zero/push` return the types.
+ZeroRuby generates TypeScript type definitions from your Ruby mutations. GET requests to your mutate endpoint return the types.
 
 ### Setup
 
-- Set `ZERO_TYPES_URL` env var to your host `http://example.com/zero/push`
+- Set `ZERO_TYPES_URL` env var to your host's mutate endpoint, e.g. `http://example.com/zero/mutate`
 - `npm install ts-to-zod --save-dev`
 - Add the following script to generate types and zod schemas
 
 ```json
 {
   "scripts": {
-    "zero:types": "mkdir -p lib/zero/__generated__ && curl -s $ZERO_TYPES_URL/zero/push > lib/zero/__generated__/zero-types.ts && npx ts-to-zod lib/zero/__generated__/zero-types.ts lib/zero/__generated__/zero-schemas.ts"
+    "zero:types": "mkdir -p lib/zero/__generated__ && curl -s $ZERO_TYPES_URL > lib/zero/__generated__/zero-types.ts && npx ts-to-zod lib/zero/__generated__/zero-types.ts lib/zero/__generated__/zero-schemas.ts"
   }
 }
 ```
@@ -283,6 +300,34 @@ With `skip_auto_transaction`, you **must** call `transact { }` or `TransactNotCa
 | Pre-transaction | LMID advanced in separate transaction |
 | Transaction | LMID advanced in separate transaction (original tx rolled back) |
 | Post-commit | LMID already committed with transaction |
+
+If LMID advancement *itself* fails (DB connection drop mid-batch, etc.), the entire push aborts with `PushFailed{reason: "database"}` and the remaining mutation IDs are returned as unprocessed. This matches the TS reference behavior and keeps the client and server LMIDs in sync.
+
+## Structured application errors
+
+Throw `ZeroRuby::Error.new(message, details: {...})` from a mutation to surface structured metadata to the client. The error is serialized into the mutation response as:
+
+```js
+{ id: {...}, result: { error: "app", message: "...", details: {...} } }
+```
+
+This is equivalent to throwing `ApplicationError` in the TypeScript reference. The `details` value must be JSON-serializable.
+
+```ruby
+class PostCreate < ApplicationMutation
+  argument :title, Types::String
+
+  def execute(title:)
+    if RateLimiter.exceeded?(current_user)
+      raise ZeroRuby::Error.new(
+        "Rate limit exceeded",
+        details: {code: "RATE_LIMITED", retryAfter: 60}
+      )
+    end
+    Post.create!(title: title, user: current_user)
+  end
+end
+```
 
 ## References
 

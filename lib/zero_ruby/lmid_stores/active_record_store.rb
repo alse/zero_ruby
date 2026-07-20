@@ -30,9 +30,10 @@ module ZeroRuby
       #
       # @param client_group_id [String] The client group ID
       # @param client_id [String] The client ID
+      # @param upstream_schema [String] Postgres schema name owned by zero-cache (e.g. "zero_0")
       # @return [Integer] The new last mutation ID (post-increment)
-      def fetch_and_increment(client_group_id, client_id)
-        table = model_class.quoted_table_name
+      def fetch_and_increment(client_group_id, client_id, upstream_schema:)
+        table = quoted_clients_table(upstream_schema)
         sql = model_class.sanitize_sql_array([<<~SQL.squish, {client_group_id:, client_id:}])
           INSERT INTO #{table} ("clientGroupID", "clientID", "lastMutationID")
           VALUES (:client_group_id, :client_id, 1)
@@ -52,44 +53,54 @@ module ZeroRuby
         model_class.transaction(&block)
       end
 
-      # Write a mutation result to the zero_0.mutations table.
+      # Write a mutation result to the <upstream_schema>.mutations table.
       #
       # @param client_group_id [String] The client group ID
       # @param client_id [String] The client ID
       # @param mutation_id [Integer] The mutation ID
       # @param result [Hash, String] The mutation result. Hashes are serialized to JSON for storage.
-      def write_mutation_result(client_group_id, client_id, mutation_id, result)
+      # @param upstream_schema [String] Postgres schema name owned by zero-cache (e.g. "zero_0")
+      def write_mutation_result(client_group_id, client_id, mutation_id, result, upstream_schema:)
         result_json = begin
           result.is_a?(String) ? result : result.to_json
         rescue JSON::GeneratorError, Encoding::UndefinedConversionError
           {error: "app", message: "Error result could not be serialized"}.to_json
         end
+        table = quoted_mutations_table(upstream_schema)
         sql = model_class.sanitize_sql_array([<<~SQL.squish, {client_group_id:, client_id:, mutation_id:, result: result_json}])
-          INSERT INTO zero_0.mutations ("clientGroupID", "clientID", "mutationID", "result")
+          INSERT INTO #{table} ("clientGroupID", "clientID", "mutationID", "result")
           VALUES (:client_group_id, :client_id, :mutation_id, :result::text::json)
         SQL
 
         model_class.connection.execute(sql)
       end
 
-      # Delete mutation results from the zero_0.mutations table.
+      # Delete mutation results from the <upstream_schema>.mutations table.
+      #
+      # Accepts three CleanupResultsArg variants:
+      # - legacy (no "type") and explicit "single": single-client delete up to a mutation ID
+      # - "bulk": delete all results for multiple clients
       #
       # @param args [Hash] Cleanup arguments
-      def delete_mutation_results(args)
+      # @param upstream_schema [String] Postgres schema name owned by zero-cache (e.g. "zero_0")
+      def delete_mutation_results(args, upstream_schema:)
         client_group_id = args["clientGroupID"]
+        table = quoted_mutations_table(upstream_schema)
 
-        sql = if args["type"] == "bulk"
+        sql = case args["type"]
+        when "bulk"
           client_ids = args["clientIDs"]
           model_class.sanitize_sql_array([<<~SQL.squish, {client_group_id:}])
-            DELETE FROM zero_0.mutations
+            DELETE FROM #{table}
             WHERE "clientGroupID" = :client_group_id
             AND "clientID" = ANY(ARRAY[#{client_ids.map { |id| model_class.connection.quote(id) }.join(",")}])
           SQL
         else
+          # "single" (Zero 1.x explicit) and legacy (no "type" field) use the same fields
           client_id = args["clientID"]
           up_to_mutation_id = args["upToMutationID"]
           model_class.sanitize_sql_array([<<~SQL.squish, {client_group_id:, client_id:, up_to_mutation_id:}])
-            DELETE FROM zero_0.mutations
+            DELETE FROM #{table}
             WHERE "clientGroupID" = :client_group_id
             AND "clientID" = :client_id
             AND "mutationID" <= :up_to_mutation_id
@@ -103,6 +114,16 @@ module ZeroRuby
 
       def default_model_class
         ZeroRuby::ZeroClient
+      end
+
+      def quoted_clients_table(upstream_schema)
+        conn = model_class.connection
+        "#{conn.quote_column_name(upstream_schema)}.#{conn.quote_column_name("clients")}"
+      end
+
+      def quoted_mutations_table(upstream_schema)
+        conn = model_class.connection
+        "#{conn.quote_column_name(upstream_schema)}.#{conn.quote_column_name("mutations")}"
       end
     end
   end

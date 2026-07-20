@@ -45,14 +45,30 @@ module ZeroRuby
 
       # Execute a Zero push request. This is the main entry point for processing mutations.
       #
+      # `user_id` is sourced from context: prefer an explicit `context[:user_id]`,
+      # falling back to `context[:current_user]&.id` for the common Rails case.
+      # When present, it is echoed in the MutateResponse so zero-cache 1.5+ can
+      # enforce client-group auth (only tabs from the same user share a client group).
+      # The value MUST be derived from server-verified credentials.
+      #
+      # `upstream_schema` is sourced from `context[:upstream_schema]` (which the
+      # controller should set from the `?schema=` query parameter that zero-cache
+      # appends). Defaults to "zero_0".
+      #
       # @param push_data [Hash] The parsed push request body
-      # @param context [Hash] Context hash to pass to mutations (e.g., current_user:)
+      # @param context [Hash] Context hash to pass to mutations. Recognized keys:
+      #   - :current_user (or :user_id) — server-authenticated user, echoed as userID
+      #   - :upstream_schema — Postgres schema name from zero-cache's ?schema= param
       # @param lmid_store [LmidStore, nil] Optional LMID store override
-      # @return [Hash] Result hash: {mutations: [...]} on success, {error: {...}} on failure
+      # @return [Hash] On success: {kind: "MutateResponse", mutations: [...], userID: ...}
+      #   (userID omitted when not resolvable). On failure: {kind: "PushFailed", ...}.
       #
       # @example Basic usage
       #   body = JSON.parse(request.body.read)
-      #   result = ZeroSchema.execute(body, context: {current_user: user})
+      #   result = ZeroSchema.execute(body, context: {
+      #     current_user: current_user,
+      #     upstream_schema: params[:schema]
+      #   })
       #   render json: result
       def execute(push_data, context:, lmid_store: nil)
         validate_push_structure!(push_data)
@@ -76,7 +92,9 @@ module ZeroRuby
         store = lmid_store || ZeroRuby.configuration.lmid_store_instance
         processor = PushProcessor.new(
           schema: self,
-          lmid_store: store
+          lmid_store: store,
+          user_id: resolve_user_id(context),
+          upstream_schema: context[:upstream_schema] || "zero_0"
         )
         processor.process(push_data, context)
       rescue ParseError => e
@@ -115,6 +133,17 @@ module ZeroRuby
       end
 
       private
+
+      # Resolve a string userID for the MutateResponse echo.
+      # Prefers an explicit context[:user_id]; otherwise derives from
+      # context[:current_user]&.id for the common Rails case.
+      def resolve_user_id(context)
+        explicit = context[:user_id]
+        return explicit.to_s unless explicit.nil?
+        user = context[:current_user]
+        return nil if user.nil? || !user.respond_to?(:id)
+        user.id&.to_s
+      end
 
       # Validate push data structure per Zero protocol
       # Required fields: clientGroupID, mutations, pushVersion, timestamp, requestID

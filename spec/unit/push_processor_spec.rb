@@ -709,7 +709,7 @@ describe ZeroRuby::PushProcessor do
   end
 
   describe "persist_mutation_failure failure" do
-    it "logs warning but returns error response when persistence fails" do
+    it "escalates to PushFailed{database} when persistence fails" do
       # Stub the store to fail on the second transaction (the error recovery one)
       call_count = 0
       allow(store).to receive(:transaction).and_wrap_original do |original, &block|
@@ -727,20 +727,25 @@ describe ZeroRuby::PushProcessor do
         "pushVersion" => 1,
         "clientGroupID" => "group-lmid-fail",
         "mutations" => [
-          {"id" => 1, "clientID" => "client-lmid", "name" => "items.auto_fail", "args" => [{"id" => "item-1"}]}
+          {"id" => 1, "clientID" => "client-lmid", "name" => "items.auto_fail", "args" => [{"id" => "item-1"}]},
+          {"id" => 2, "clientID" => "client-lmid", "name" => "items.create", "args" => [{"id" => "item-2"}]}
         ]
       }
 
-      # Capture stderr and verify warning is logged
-      result = nil
-      expect {
-        result = processor.process(push_data, context)
-      }.to output(/\[ZeroRuby\] Failed to persist mutation failure/).to_stderr
+      result = processor.process(push_data, context)
 
-      # Should still return the mutation error response (not raise)
-      expect(result[:mutations]).to be_a(Array)
-      expect(result[:mutations][0][:result][:error]).to eq("app")
-      expect(result[:mutations][0][:result][:message]).to eq("Auto transact error")
+      # Per Zero protocol: a failure to persist the mutation error desyncs the
+      # client (LMID lost), so the batch must abort with PushFailed{database}
+      # and list the unprocessed mutation IDs so they can be retried.
+      expect(result[:kind]).to eq("PushFailed")
+      expect(result[:origin]).to eq("server")
+      expect(result[:reason]).to eq("database")
+      expect(result[:message]).to include("Failed to persist mutation failure")
+      expect(result[:message]).to include("Connection lost")
+      expect(result[:mutationIDs]).to eq([
+        {id: 1, clientID: "client-lmid"},
+        {id: 2, clientID: "client-lmid"}
+      ])
     end
   end
 
@@ -845,6 +850,36 @@ describe ZeroRuby::PushProcessor do
       expect(get_mutation_result("group-cleanup", "client-cleanup", 1)).to be_nil
       expect(get_mutation_result("group-cleanup", "client-cleanup", 2)).to be_nil
       expect(get_mutation_result("group-cleanup", "client-cleanup", 3)).not_to be_nil
+    end
+
+    it "deletes mutation results (explicit type: 'single')" do
+      # zero-cache 1.x sends an explicit `type: 'single'` discriminator
+      insert_mutation_result("group-single", "client-single", 1, {error: "app", message: "err1"})
+      insert_mutation_result("group-single", "client-single", 2, {error: "app", message: "err2"})
+      insert_mutation_result("group-single", "client-single", 3, {error: "app", message: "err3"})
+
+      push_data = {
+        "pushVersion" => 1,
+        "clientGroupID" => "group-single",
+        "mutations" => [
+          {
+            "id" => 1, "clientID" => "client-single",
+            "name" => "_zero_cleanupResults",
+            "args" => [{
+              "type" => "single",
+              "clientGroupID" => "group-single",
+              "clientID" => "client-single",
+              "upToMutationID" => 2
+            }]
+          }
+        ]
+      }
+
+      processor.process(push_data, context)
+
+      expect(get_mutation_result("group-single", "client-single", 1)).to be_nil
+      expect(get_mutation_result("group-single", "client-single", 2)).to be_nil
+      expect(get_mutation_result("group-single", "client-single", 3)).not_to be_nil
     end
 
     it "deletes mutation results (bulk)" do
