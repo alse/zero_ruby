@@ -405,7 +405,7 @@ describe ZeroRuby::PushProcessor do
     result = processor.process(push_data, context)
 
     expect(result[:mutations][0][:result][:error]).to eq("app")
-    expect(result[:mutations][0][:result][:message]).to match(/Unknown mutation/)
+    expect(result[:mutations][0][:result][:message]).to match(/could not find mutator/)
   end
 
   describe "auto_transact behavior" do
@@ -740,8 +740,10 @@ describe ZeroRuby::PushProcessor do
       expect(result[:kind]).to eq("PushFailed")
       expect(result[:origin]).to eq("server")
       expect(result[:reason]).to eq("database")
-      expect(result[:message]).to include("Failed to persist mutation failure")
-      expect(result[:message]).to include("Connection lost")
+      # Message/details mirror the reference's DatabaseTransactionError; the
+      # transaction never opened, so the "Failed to open" variant is used.
+      expect(result[:message]).to eq("Failed to open database transaction: Connection lost")
+      expect(result[:details]).to eq({name: "DatabaseTransactionError"})
       expect(result[:mutationIDs]).to eq([
         {id: 1, clientID: "client-lmid"},
         {id: 2, clientID: "client-lmid"}

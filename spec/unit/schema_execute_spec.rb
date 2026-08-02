@@ -63,7 +63,7 @@ describe "Schema#execute" do
     expect(result[:kind]).to eq("MutateResponse")
     mutation_result = result[:mutations][0]
     expect(mutation_result[:result][:error]).to eq("app")
-    expect(mutation_result[:result][:message]).to match(/Unknown mutation/)
+    expect(mutation_result[:result][:message]).to match(/could not find mutator/)
   end
 
   it "rejects unsupported push version" do

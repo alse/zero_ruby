@@ -1,5 +1,89 @@
 # Changelog
 
+## 0.1.0.alpha8
+
+Compatibility verification and semantics alignment against Zero **v1.8.0**
+(the latest stable zero-cache/zero-server release). The push wire protocol is
+unchanged between Zero 1.5.0 and 1.8.0, so no rollout ordering is required;
+this release closes semantic gaps between the gem and the v1.8.0 reference
+implementation (`zero-server/src/process-mutations.ts`).
+
+### Fixed (protocol semantics)
+
+- **Unknown mutations now advance the LMID and persist their error result**,
+  matching the reference. Previously the LMID was left untouched, which could
+  wedge a client into resending the unknown mutation forever. The error
+  message is now the reference's `could not find mutator <name>`.
+- **Transaction failures are retried once without the mutator** (reference
+  `Transactor#transact` semantics, upstream #5634): infrastructure errors
+  during the mutation transaction now advance the LMID and persist an `app`
+  error result in a second transaction, skipping the mutation instead of
+  failing the whole push. Only a failing retry aborts with
+  `PushFailed{reason: "database"}`.
+- **LMID re-check during failure persistence**: the persist/retry transaction
+  re-validates the LMID like the reference. An `alreadyProcessed` race during
+  a transaction retry yields an `alreadyProcessed` result; an out-of-order
+  race aborts with `PushFailed{reason: "oooMutation"}`; a duplicate detected
+  while persisting a pre-transaction failure aborts with
+  `PushFailed{reason: "internal"}` (reference `persistPreTransactionFailure`).
+- **Top-level catch-all**: unexpected errors now return
+  `PushFailed{reason: "internal"}` with the unprocessed mutation IDs instead
+  of raising (which surfaced as HTTP 500 / retries in zero-cache).
+- **CRUD-typed mutations** (`type != "custom"`) abort the push with
+  `PushFailed{reason: "internal", message: "Expected custom mutation"}`,
+  matching the reference assertion.
+- **`alreadyProcessed` details** now use the reference text and value:
+  `Ignoring mutation from <clientID> with ID <id> as it was already
+  processed. Expected: <postIncrementLMID>` (previously a different wording
+  with an off-by-one expected value).
+- **`PushFailed` bodies include `details`** when the failing error carries
+  JSON-serializable details.
+- **Wrapped non-`ZeroRuby::Error` exceptions** now carry
+  `details: {name: "<ExceptionClass>"}` in their `app` error result,
+  mirroring the reference's `getErrorDetails` fallback.
+- **Message alignment**: parse failures are prefixed with
+  `Failed to parse push body: …` and the unsupported-push-version message is
+  `Unsupported push version: <v>` (reference format).
+- `OutOfOrderMutationError#error_type` corrected from `"ooo"` to the wire
+  value `"oooMutation"` (defensive only — this error always escalates to a
+  top-level `PushFailed`).
+- **JS-falsy `details` are omitted** (`0`, `""`, `false`, `NaN`), matching the
+  reference's `details ? {details} : {}` guards, both on the wire and in the
+  persisted `mutations` row.
+- **`PushFailed{database}` bodies match the reference's
+  `DatabaseTransactionError` framing**: message is
+  `Failed to open database transaction: <cause>` /
+  `Database transaction failed after opening: <cause>` with
+  `details: {name: "DatabaseTransactionError"}`. The previous
+  `Failed to persist mutation failure for …` context now goes to the server
+  log instead of the wire.
+- **Non-`StandardError` exceptions** from handlers (e.g. `NotImplementedError`
+  when `#execute` is missing) are handled like the reference's
+  catch-everything semantics — app error result, LMID advanced — instead of
+  escaping as HTTP 500. Process-control exceptions (`SignalException`,
+  `SystemExit`, `NoMemoryError`) still propagate.
+- **`_zero_cleanupResults` args with unknown extra keys are rejected**
+  (skipped with a warning, no deletion), matching the reference's strict-mode
+  valita validation.
+
+### Changed
+
+- **Explicit `userID: null` support**: a context containing an explicit
+  `user_id: nil` key now echoes `"userID": null` (zero-cache's
+  server-validated "logged out" state). Contexts without a `:user_id` key and
+  without a resolvable `current_user` continue to omit `userID`. Note: if you
+  previously passed `user_id: nil` alongside `current_user`, the explicit nil
+  now wins — remove the key to fall back to `current_user`.
+- **Stricter push body validation** per `pushBodySchema`: top-level field
+  types and per-mutation `id`/`clientID`/`name`/`args` shapes are validated
+  and rejected with `PushFailed{reason: "parse"}`. Unknown extra fields
+  (`schemaVersion`, `auth`, `traceparent`, …) still pass through.
+- **`_zero_cleanupResults` argument validation** matches
+  `cleanupResultsArgSchema`: malformed args (empty bulk `clientIDs`, unknown
+  `type`, missing `upToMutationID`, …) are skipped with a warning and never
+  touch the database; the intercept is skipped for non-`custom` typed
+  mutations.
+
 ## 0.1.0.alpha7
 
 Compatibility upgrade from Zero 0.25.12 → 1.5+.

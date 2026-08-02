@@ -117,7 +117,7 @@ describe "Response Format Integration" do
         kind: "PushFailed",
         origin: "server",
         reason: "unsupportedPushVersion",
-        message: "Unsupported push version: 999. Expected: 1",
+        message: "Unsupported push version: 999",
         mutationIDs: []
       })
     end
@@ -169,7 +169,7 @@ describe "Response Format Integration" do
         kind: "PushFailed",
         origin: "server",
         reason: "parse",
-        message: "Push data must be a hash",
+        message: "Failed to parse push body: push data must be an object",
         mutationIDs: []
       })
     end
@@ -183,7 +183,7 @@ describe "Response Format Integration" do
         kind: "PushFailed",
         origin: "server",
         reason: "parse",
-        message: "Missing required field: clientGroupID",
+        message: "Failed to parse push body: missing required field: clientGroupID",
         mutationIDs: []
       })
     end
@@ -197,7 +197,7 @@ describe "Response Format Integration" do
         kind: "PushFailed",
         origin: "server",
         reason: "parse",
-        message: "Missing required field: timestamp",
+        message: "Failed to parse push body: missing required field: timestamp",
         mutationIDs: []
       })
     end
@@ -211,7 +211,7 @@ describe "Response Format Integration" do
         kind: "PushFailed",
         origin: "server",
         reason: "parse",
-        message: "Missing required field: requestID",
+        message: "Failed to parse push body: missing required field: requestID",
         mutationIDs: []
       })
     end
@@ -231,7 +231,7 @@ describe "Response Format Integration" do
         kind: "PushFailed",
         origin: "server",
         reason: "parse",
-        message: "Field 'mutations' must be an array",
+        message: "Failed to parse push body: field 'mutations' must be an array",
         mutationIDs: []
       })
     end
@@ -412,7 +412,7 @@ describe "Response Format Integration" do
             id: {id: 3, clientID: "client-abc"},
             result: {
               error: "alreadyProcessed",
-              details: "Mutation 3 already processed for client client-abc. Last mutation ID: 5"
+              details: "Ignoring mutation from client-abc with ID 3 as it was already processed. Expected: 6"
             }
           }
         ]
@@ -436,7 +436,7 @@ describe "Response Format Integration" do
             id: {id: 1, clientID: "client-abc"},
             result: {
               error: "app",
-              message: "Unknown mutation: posts.delete"
+              message: "could not find mutator posts.delete"
             }
           }
         ]

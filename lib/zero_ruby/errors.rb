@@ -41,7 +41,8 @@ module ZeroRuby
 
     def initialize(mutation_name)
       @mutation_name = mutation_name
-      super("Unknown mutation: #{mutation_name}")
+      # Matches the reference implementation's "could not find mutator" text
+      super("could not find mutator #{mutation_name}")
     end
   end
 
@@ -56,7 +57,9 @@ module ZeroRuby
     end
   end
 
-  # Raised when a mutation has already been processed (duplicate)
+  # Raised when a mutation has already been processed (duplicate).
+  # Message text matches zero-cache's MutationAlreadyProcessedError, where
+  # `last_mutation_id` is the expected (post-increment) mutation ID.
   class MutationAlreadyProcessedError < Error
     attr_reader :client_id, :received_id, :last_mutation_id
 
@@ -64,7 +67,7 @@ module ZeroRuby
       @client_id = client_id
       @received_id = received_id
       @last_mutation_id = last_mutation_id
-      super("Mutation #{received_id} already processed for client #{client_id}. Last mutation ID: #{last_mutation_id}")
+      super("Ignoring mutation from #{client_id} with ID #{received_id} as it was already processed. Expected: #{last_mutation_id}")
     end
 
     def error_type
@@ -84,7 +87,10 @@ module ZeroRuby
     end
 
     def error_type
-      "ooo"
+      # Per-mutation ooo results are deprecated upstream; the wire value is
+      # "oooMutation" (zeroErrorSchema). In practice this error always
+      # escalates to a top-level PushFailed{reason: "oooMutation"}.
+      "oooMutation"
     end
   end
 

@@ -6,10 +6,19 @@ The goal is to match all features of the original TypeScript implementation. Whe
 
 ## Source files for original ts implementation
 
-**Primary Source Files:**
-- [push.ts](https://github.com/rocicorp/mono/blob/main/packages/zero-protocol/src/push.ts) - Response schemas
-- [error.ts](https://github.com/rocicorp/mono/blob/main/packages/zero-protocol/src/error.ts) - Error types
-- [process-mutations.ts](https://github.com/rocicorp/mono/blob/main/packages/zero-server/src/process-mutations.ts) - Reference implementation
+**Primary Source Files** (last verified against tag `zero/v1.8.0`):
+- [process-mutations.ts](https://github.com/rocicorp/mono/blob/main/packages/zero-server/src/process-mutations.ts) - Reference implementation (authoritative semantics)
+- [mutate-server.ts](https://github.com/rocicorp/mono/blob/main/packages/zero-protocol/src/mutate-server.ts) - MutateResponse/mutateParams schemas
+- [push.ts](https://github.com/rocicorp/mono/blob/main/packages/zero-protocol/src/push.ts) - PushBody + legacy response schemas
+- [mutation.ts](https://github.com/rocicorp/mono/blob/main/packages/zero-protocol/src/mutation.ts) - Mutation + per-mutation result schemas, `_zero_cleanupResults` args
+- [error.ts](https://github.com/rocicorp/mono/blob/main/packages/zero-protocol/src/error.ts) - PushFailed body schema (+ error-kind/origin/reason enums)
+- [zql-database.ts](https://github.com/rocicorp/mono/blob/main/packages/zero-server/src/zql-database.ts) - Reference SQL for `clients`/`mutations` tables
+
+When re-verifying against a newer Zero release, clone the monorepo into
+`.local/tmp/mono` and diff these files from the last verified tag to the new
+one — plus `zero-cache/src/custom/fetch.ts` (the caller contract) and
+`zero-cache/src/services/change-source/pg/schema/shard.ts` (the
+`clients`/`mutations` DDL).
 
 
 ## Project Structure

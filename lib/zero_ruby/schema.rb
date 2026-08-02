@@ -84,16 +84,18 @@ module ZeroRuby
             kind: "PushFailed",
             origin: "server",
             reason: "unsupportedPushVersion",
-            message: "Unsupported push version: #{push_version}. Expected: #{supported_version}",
+            message: "Unsupported push version: #{push_version}",
             mutationIDs: mutation_ids
           }
         end
 
+        user_id_provided, user_id = resolve_user_id(context)
         store = lmid_store || ZeroRuby.configuration.lmid_store_instance
         processor = PushProcessor.new(
           schema: self,
           lmid_store: store,
-          user_id: resolve_user_id(context),
+          user_id: user_id,
+          user_id_provided: user_id_provided,
           upstream_schema: context[:upstream_schema] || "zero_0"
         )
         processor.process(push_data, context)
@@ -120,10 +122,22 @@ module ZeroRuby
         handler = mutations[name]
         raise MutationNotFoundError.new(name) unless handler
 
-        raw_args = extract_args(mutation_data)
-        params = KeyTransformer.transform(raw_args, handler.arguments)
-
-        handler.new(params, context).call(&transact)
+        if handler.skip_auto_transaction?
+          # Manual mode mirrors the TS custom-handler model: argument
+          # validation runs pre-transaction, and the handler decides when to
+          # open the transaction by calling transact itself.
+          build_mutation(handler, mutation_data, context).call(&transact)
+        else
+          # Reference parity (zero-server PushProcessor#processMutation):
+          # argument coercion/validation and execution run inside the
+          # transaction, after the LMID check, so a redelivered mutation is
+          # answered with alreadyProcessed before its arguments are ever
+          # revalidated. The passthrough block satisfies Mutation#call's
+          # transact contract without opening a second transaction.
+          transact.call do
+            build_mutation(handler, mutation_data, context).call { |&block| block.call }
+          end
+        end
       rescue Dry::Struct::Error => e
         raise ValidationError.new(ErrorFormatter.format_struct_error(e))
       rescue Dry::Types::CoercionError => e
@@ -134,33 +148,91 @@ module ZeroRuby
 
       private
 
-      # Resolve a string userID for the MutateResponse echo.
-      # Prefers an explicit context[:user_id]; otherwise derives from
-      # context[:current_user]&.id for the common Rails case.
-      def resolve_user_id(context)
-        explicit = context[:user_id]
-        return explicit.to_s unless explicit.nil?
-        user = context[:current_user]
-        return nil if user.nil? || !user.respond_to?(:id)
-        user.id&.to_s
+      # Build the handler instance, converting argument coercion/validation
+      # failures into ValidationError at the construction site. This must
+      # happen here (not only in execute_mutation's rescues) because inside
+      # the LMID transaction the processor wraps unrecognized exceptions
+      # generically, which would lose the formatted validation messages.
+      def build_mutation(handler, mutation_data, context)
+        raw_args = extract_args(mutation_data)
+        params = KeyTransformer.transform(raw_args, handler.arguments)
+        handler.new(params, context)
+      rescue Dry::Struct::Error => e
+        raise ValidationError.new(ErrorFormatter.format_struct_error(e))
+      rescue Dry::Types::CoercionError => e
+        raise ValidationError.new([ErrorFormatter.format_coercion_error(e)])
+      rescue Dry::Types::ConstraintError => e
+        raise ValidationError.new([ErrorFormatter.format_constraint_error(e)])
       end
 
-      # Validate push data structure per Zero protocol
-      # Required fields: clientGroupID, mutations, pushVersion, timestamp, requestID
+      # Resolve the userID for the MutateResponse echo.
+      # Returns [provided, value]:
+      # - context has :user_id key      -> [true, value&.to_s]. An explicit nil
+      #   is echoed as "userID": null, which zero-cache 1.5+ treats as a
+      #   server-validated "logged out" assertion. Only pass user_id: nil when
+      #   you have verified the request is unauthenticated.
+      # - context[:current_user]&.id    -> [true, id.to_s]
+      # - otherwise                     -> [false, nil]; userID is omitted and
+      #   zero-cache falls back to the client-claimed identity.
+      def resolve_user_id(context)
+        return [true, context[:user_id]&.to_s] if context.key?(:user_id)
+        user = context[:current_user]
+        if user.respond_to?(:id) && !user.id.nil?
+          [true, user.id.to_s]
+        else
+          [false, nil]
+        end
+      end
+
+      # Validate push data structure per Zero's pushBodySchema. Extra fields
+      # pass through (the reference parses in passthrough mode); required
+      # fields must be present with the right JSON types.
       # @raise [ParseError] If push data is malformed
       def validate_push_structure!(push_data)
         unless push_data.is_a?(Hash)
-          raise ParseError.new("Push data must be a hash")
+          raise ParseError.new("Failed to parse push body: push data must be an object")
         end
 
         %w[clientGroupID mutations pushVersion timestamp requestID].each do |field|
           unless push_data.key?(field)
-            raise ParseError.new("Missing required field: #{field}")
+            raise ParseError.new("Failed to parse push body: missing required field: #{field}")
+          end
+        end
+
+        {"clientGroupID" => String, "requestID" => String, "pushVersion" => Numeric, "timestamp" => Numeric}.each do |field, type|
+          unless push_data[field].is_a?(type)
+            raise ParseError.new("Failed to parse push body: field '#{field}' must be a #{(type == Numeric) ? "number" : "string"}")
           end
         end
 
         unless push_data["mutations"].is_a?(Array)
-          raise ParseError.new("Field 'mutations' must be an array")
+          raise ParseError.new("Failed to parse push body: field 'mutations' must be an array")
+        end
+
+        push_data["mutations"].each { |m| validate_mutation_structure!(m) }
+      end
+
+      # Validate one entry of the mutations array per Zero's mutationSchema
+      # (custom mutations: numeric id, string clientID, string name, array args).
+      # `type` and `timestamp` are accepted but not required, and args may be
+      # omitted for handler-side leniency.
+      def validate_mutation_structure!(mutation)
+        unless mutation.is_a?(Hash)
+          raise ParseError.new("Failed to parse push body: each mutation must be an object")
+        end
+
+        unless mutation["id"].is_a?(Numeric)
+          raise ParseError.new("Failed to parse push body: mutation field 'id' must be a number")
+        end
+
+        %w[clientID name].each do |field|
+          unless mutation[field].is_a?(String)
+            raise ParseError.new("Failed to parse push body: mutation field '#{field}' must be a string")
+          end
+        end
+
+        if mutation.key?("args") && !mutation["args"].nil? && !mutation["args"].is_a?(Array)
+          raise ParseError.new("Failed to parse push body: mutation field 'args' must be an array")
         end
       end
 

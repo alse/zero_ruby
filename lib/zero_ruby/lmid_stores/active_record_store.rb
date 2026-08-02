@@ -47,10 +47,15 @@ module ZeroRuby
 
       # Execute a block within an ActiveRecord transaction.
       #
+      # requires_new ensures a real (savepoint-backed) transaction even when
+      # the caller is already inside an app-level transaction; otherwise
+      # Rails silently joins the outer transaction and a rescued mutation
+      # failure cannot roll back its writes or LMID increment.
+      #
       # @yield The block to execute within the transaction
       # @return The result of the block
       def transaction(&block)
-        model_class.transaction(&block)
+        model_class.transaction(requires_new: true, &block)
       end
 
       # Write a mutation result to the <upstream_schema>.mutations table.

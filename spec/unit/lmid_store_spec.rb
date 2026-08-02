@@ -74,6 +74,21 @@ describe ZeroRuby::LmidStores::ActiveRecordStore do
     expect(result).to eq(42)
   end
 
+  it "rolls back nested work via savepoint inside an ambient ActiveRecord transaction" do
+    ActiveRecord::Base.transaction do
+      store.transaction do
+        store.fetch_and_increment("group-1", "client-1", upstream_schema: schema)
+        raise ZeroRuby::Error.new("boom")
+      end
+    rescue ZeroRuby::Error
+      # rescued outside the store transaction but inside the app transaction,
+      # exactly like PushProcessor rescues application errors
+    end
+
+    row = ZeroRuby::ZeroClient.find_by("clientGroupID" => "group-1", "clientID" => "client-1")
+    expect(row).to be_nil
+  end
+
   it "rolls back on error" do
     store.fetch_and_increment("group-1", "client-1", upstream_schema: schema)  # -> 1
 

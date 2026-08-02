@@ -1,6 +1,6 @@
 # zero_ruby
 
-A Ruby gem for handling [Zero](https://zero.rocicorp.dev/) mutations with type safety, validation, and full protocol support. Compatible with **Zero 1.5+**.
+A Ruby gem for handling [Zero](https://zero.rocicorp.dev/) mutations with type safety, validation, and full protocol support. Compatible with **Zero 1.5 – 1.8+** (verified against the `zero/v1.8.0` reference implementation; the push protocol is unchanged through Zero 1.8).
 
 > **Rollout note:** the 1.5 response shape (`MutateResponse` + `userID` echo) is not parseable by `zero-cache` 1.4 and earlier. Deploy `zero-cache@1.5+` before upgrading this gem.
 
@@ -109,6 +109,30 @@ match '/zero/mutate', to: 'zero#mutate', via: [:get, :post]
 - `X-Api-Key: <secret>` — set if you configured `ZERO_MUTATE_API_KEY` on zero-cache. Validate it (constant-time compare) to ensure the request really came from your zero-cache.
 
 Query params: zero-cache appends `?schema=<upstream_schema>&appID=<appID>` on every request. The `schema` value goes into `context[:upstream_schema]` so the gem can locate the correct `<schema>.clients` / `<schema>.mutations` tables.
+
+#### userID echo semantics
+
+The `userID` field of a `MutateResponse` drives zero-cache's authenticated
+client groups (Zero 1.5+):
+
+- Context without `:user_id` / resolvable `:current_user` → `userID` omitted.
+  zero-cache falls back to the client-claimed identity (safe legacy behavior).
+- `context[:current_user]` with an id, or `context[:user_id] = "abc"` →
+  `userID: "abc"`. zero-cache pins the client group to that identity and
+  rejects mismatched connections with `Unauthorized`.
+- `context` containing an explicit `user_id: nil` key → `userID: null`, a
+  server-validated "logged out" assertion. **Only pass `user_id: nil` when you
+  have positively verified the request is unauthenticated** — zero-cache will
+  terminate connections whose clients claim a user.
+
+#### HTTP status codes
+
+Always respond `200 OK` with the returned body — **including `PushFailed`
+bodies**; zero-cache parses the failure out of the JSON. Reserve `401`/`403`
+for authentication failures (bad `Authorization` token / `X-Api-Key`): a
+non-OK status makes zero-cache treat the push as an HTTP error and retry or
+surface it, and auth failures invalidate the client connection so it can
+re-authenticate.
 
 ## Define custom input types (optional)
 

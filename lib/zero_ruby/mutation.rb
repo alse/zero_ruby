@@ -240,6 +240,13 @@ module ZeroRuby
     # - Default (no skip) - Just executes the block (already in transaction)
     # - skip_auto_transaction - Wraps block in transaction via transact_proc
     #
+    # Note (intentional divergence from the TS handleMutateRequest API): when
+    # the transaction fails or the mutation turns out to be a duplicate,
+    # transact RAISES, so code after it never runs. The TS API instead hands
+    # the handler an error MutationResponse value and lets it continue. The
+    # wire result zero-cache sees is equivalent either way; the Ruby DSL
+    # prefers not to run post-commit code for work that was rolled back.
+    #
     # For skip_auto_transaction mutations, you MUST call this method.
     # For default mutations, calling this is optional (no-op, just runs block).
     #

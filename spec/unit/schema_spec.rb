@@ -144,7 +144,7 @@ describe ZeroRuby::Schema do
 
     expect {
       TestSchema.execute_mutation(mutation_data, context, &transact)
-    }.to raise_error(ZeroRuby::MutationNotFoundError, /Unknown mutation/)
+    }.to raise_error(ZeroRuby::MutationNotFoundError, /could not find mutator/)
   end
 
   it "normalizes pipe-separated names" do
